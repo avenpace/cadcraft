@@ -46,6 +46,10 @@ impl Inbox {
     /// Show the browser's file picker and return at once. A chosen file arrives through
     /// [`Self::drain`]; cancelling the picker does nothing.
     pub fn pick(&self) {
+        // Clawku: opening goes through the host page's storage browser
+        if crate::clawku_pick::host_pick("cadcraft", "document") {
+            return;
+        }
         if let Err(e) = self.show_picker() {
             self.push(Err(format!("Open: the browser's file picker is not available ({e})")));
         }

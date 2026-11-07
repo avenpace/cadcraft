@@ -13,6 +13,8 @@
 #[cfg(target_arch = "wasm32")]
 pub mod download;
 #[cfg(target_arch = "wasm32")]
+mod clawku_pick;
+#[cfg(target_arch = "wasm32")]
 mod host;
 
 #[cfg(any(target_arch = "wasm32", test))]
