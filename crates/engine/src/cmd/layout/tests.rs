@@ -320,7 +320,7 @@ fn plot_help_names_the_device_and_the_built_in_devices() {
         assert!(help.contains("device?"), "{id}: {help}");
     }
     let help = crate::find_command("plot").map(|c| c.params).unwrap_or_default();
-    for name in ["CADCraft PDF", "CADCraft PNG", "CADCraft SVG"] {
+    for name in ["CADCraft PDF", "CADCraft PNG", "ClawCAD SVG"] {
         assert!(super::super::plotters::find_device(name).is_some(), "{name} is not a device");
         assert!(help.contains(name), "plot help lacks {name}");
     }

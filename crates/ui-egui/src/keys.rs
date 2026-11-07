@@ -1,5 +1,5 @@
 //! The user's keyboard shortcuts (Tools ▸ Customize ▸ Keyboard Shortcuts...): any command can get
-//! one, and a shortcut the user gives wins over CADCraft's own; the command that had it loses it,
+//! one, and a shortcut the user gives wins over ClawCAD's own; the command that had it loses it,
 //! and the dialog says so. They are kept with the other preferences (`shortcuts`).
 //!
 //! Recording a shortcut (click, press the keys, Esc to cancel) and the conflict rules come from
@@ -400,7 +400,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                             let _ = assign(&mut app.ui.shortcuts, id, "");
                         }
                         if app.ui.shortcuts.contains_key(*id)
-                            && ui.small_button(crate::tl!("Default")).on_hover_text(crate::tl!("Back to CADCraft's shortcut")).clicked()
+                            && ui.small_button(crate::tl!("Default")).on_hover_text(crate::tl!("Back to ClawCAD's shortcut")).clicked()
                         {
                             app.ui.shortcuts.remove(*id);
                         }
@@ -421,7 +421,7 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
                 reset_all = ui.button(crate::tl!("Reset to Defaults")).clicked();
             });
             ui.label(
-                RichText::new(crate::tl!("A shortcut you give wins over CADCraft's own. Changes apply at once and are kept for next time."))
+                RichText::new(crate::tl!("A shortcut you give wins over ClawCAD's own. Changes apply at once and are kept for next time."))
                     .color(t.text_dim)
                     .small(),
             );

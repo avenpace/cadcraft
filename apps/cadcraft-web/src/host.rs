@@ -88,7 +88,7 @@ impl Bridge {
 /// The engine's delivery hook in host mode ([`cadcraft_engine::cmd::file::set_deliver`]): hand
 /// the file to the host page. `Ok` once it was sent; the engine then counts a drawing as saved.
 pub fn deliver(name: &str, _mime: &str, bytes: &[u8]) -> Result<(), String> {
-    let bridge = BRIDGE.with(|b| b.borrow().clone()).ok_or("the page that embeds CADCraft is gone")?;
+    let bridge = BRIDGE.with(|b| b.borrow().clone()).ok_or("the page that embeds ClawCAD is gone")?;
     bridge.post_save(name, bytes)
 }
 
@@ -99,7 +99,7 @@ pub fn deliver(name: &str, _mime: &str, bytes: &[u8]) -> Result<(), String> {
 fn receive_open(name: &str, data: &FileData, inbox: &crate::upload::Inbox) {
     let name = if name == "document" { DEFAULT_NAME } else { name }.to_string();
     let FileData::Bytes(array) = data else {
-        inbox.refuse(format!("Open: {name} came as a File; CADCraft reads bytes"));
+        inbox.refuse(format!("Open: {name} came as a File; ClawCAD reads bytes"));
         return;
     };
     // Refuse an oversized drawing before copying it into the app's memory (the data's own length).

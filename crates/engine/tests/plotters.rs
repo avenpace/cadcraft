@@ -43,7 +43,7 @@ fn plotted(r: Value) -> Value {
 fn manage_devices() {
     let mut s = session();
     let n = names(&mut s);
-    assert_eq!(n[..3], ["CADCraft PDF", "CADCraft PNG", "CADCraft SVG"], "built-in devices first");
+    assert_eq!(n[..3], ["CADCraft PDF", "CADCraft PNG", "ClawCAD SVG"], "built-in devices first");
     let pdf = s.execute("plottermanager", &json!({"action": "get", "name": "cadcraft pdf"})).unwrap();
     assert!(pdf["builtin"].as_bool().unwrap());
     let papers = pdf["papers"].as_array().unwrap();
@@ -62,7 +62,7 @@ fn manage_devices() {
     assert!(names(&mut s).contains(&"Office Raster".to_string()));
     assert!(s.execute("plottermanager", &json!({"action": "new", "name": "OFFICE RASTER"})).is_err(), "duplicate");
     assert!(s.execute("plottermanager", &json!({"action": "set", "name": "CADCraft PDF", "resolution": 100})).is_err(), "built-ins are fixed");
-    assert!(s.execute("plottermanager", &json!({"action": "delete", "name": "CADCraft SVG"})).is_err());
+    assert!(s.execute("plottermanager", &json!({"action": "delete", "name": "ClawCAD SVG"})).is_err());
     let bad_margins = json!({"name": "x", "width": 100, "height": 100, "margins": [60, 0, 60, 0]});
     assert!(s.execute("plottermanager", &json!({"action": "set", "name": "Office Raster", "paper": bad_margins})).is_err());
 

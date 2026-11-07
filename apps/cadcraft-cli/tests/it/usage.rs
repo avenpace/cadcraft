@@ -95,13 +95,13 @@ fn top_level_requests() {
     run_cases(
         "top",
         &[
-            case("--help", &["--help"], 0, Line("cadcraft-cli: headless CADCraft"), Empty),
-            case("-h", &["-h"], 0, Line("cadcraft-cli: headless CADCraft"), Empty),
-            case("help", &["help"], 0, Line("cadcraft-cli: headless CADCraft"), Empty),
+            case("--help", &["--help"], 0, Line("cadcraft-cli: headless ClawCAD"), Empty),
+            case("-h", &["-h"], 0, Line("cadcraft-cli: headless ClawCAD"), Empty),
+            case("help", &["help"], 0, Line("cadcraft-cli: headless ClawCAD"), Empty),
             case("--version", &["--version"], 0, Starts("cadcraft-cli "), Empty),
             case("-V", &["-V"], 0, Starts("cadcraft-cli "), Empty),
             case("version is not a subcommand", &["version"], 2, Empty, Line("error: unrecognized subcommand 'version'")),
-            case("bare", &[], 2, Empty, Line("cadcraft-cli: headless CADCraft")),
+            case("bare", &[], 2, Empty, Line("cadcraft-cli: headless ClawCAD")),
             case("unknown subcommand", &["foo"], 2, Empty, Line("error: unrecognized subcommand 'foo'")),
             case("unknown top-level flag", &["--bogus"], 2, Empty, Line("error: unexpected argument '--bogus' found")),
             case("empty subcommand", &[""], 2, Empty, Line("error: unrecognized subcommand ''")),

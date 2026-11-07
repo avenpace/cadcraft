@@ -1,7 +1,7 @@
 //! Plotter configurations: PLOTTERMANAGER / -PLOTTERMANAGER, and the device and paper a page
 //! setup or a plot uses.
 //!
-//! The built-in devices (`CADCraft PDF`, `CADCraft PNG`, `CADCraft SVG`) come first. They offer
+//! The built-in devices (`CADCraft PDF`, `CADCraft PNG`, `ClawCAD SVG`) come first. They offer
 //! the standard ISO and ANSI/ARCH paper sizes with 5 mm (ISO) or quarter-inch (inch sizes)
 //! margins. User devices are `*.plotter.json` files ([`cadcraft_doc::PlotterConfig`],
 //! `docs/plotters.md`) in a folder the host provides through [`set_plotter_store`]. Without
@@ -128,7 +128,7 @@ const MAX_DEVICES: usize = 1000;
 const BUILTIN: [(&str, PlotOutput, &str); 3] = [
     ("CADCraft PDF", PlotOutput::Pdf, "Vector PDF"),
     ("CADCraft PNG", PlotOutput::Png, "Raster PNG image"),
-    ("CADCraft SVG", PlotOutput::Svg, "Vector SVG image"),
+    ("ClawCAD SVG", PlotOutput::Svg, "Vector SVG image"),
 ];
 
 /// A page setup's "no device" name.
