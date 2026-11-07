@@ -831,6 +831,7 @@ dependencies = [
  "craft-web-host",
  "eframe",
  "egui",
+ "js-sys",
  "log",
  "serde_json",
  "wasm-bindgen",
