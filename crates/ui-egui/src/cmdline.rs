@@ -43,6 +43,9 @@ pub struct CmdLine {
     ime_generation: u64,
     /// Whether the command line published an IME context last frame.
     ime_on: bool,
+    /// The command line was tapped (phones and tablets have no keys to type a command with
+    /// otherwise): keep the on-screen keyboard up until a tap elsewhere or Escape.
+    pub touch_typing: bool,
 }
 
 /// The most history lines the command line shows above its bar.
@@ -294,7 +297,18 @@ pub fn keyboard(app: &mut CadApp, ctx: &egui::Context) {
     app.cmd.watch_selection(&selection);
     let mac = ctx.os() == egui::os::OperatingSystem::Mac;
     let text_prompt = app.session.current_prompt().is_some_and(|p| p.accept.text && !p.accept.point && !p.accept.number);
-    if text_prompt {
+    // A tap on the command line brings up an on-screen keyboard for it; a tap elsewhere or Escape
+    // puts it away.
+    let bar = app.cmd.ime_rect.map(|(bar, _)| bar);
+    for ev in &events {
+        match ev {
+            egui::Event::PointerButton { pos, pressed: true, .. } => app.cmd.touch_typing = bar.is_some_and(|b| b.contains(*pos)),
+            egui::Event::Touch { phase: egui::TouchPhase::Start, pos, .. } => app.cmd.touch_typing = bar.is_some_and(|b| b.contains(*pos)),
+            egui::Event::Key { key: Key::Escape, pressed: true, .. } => app.cmd.touch_typing = false,
+            _ => {}
+        }
+    }
+    if text_prompt || app.cmd.touch_typing {
         enable_ime(app, ctx);
     } else {
         // No prompt is collecting text: a composition left over from one cannot belong here.
