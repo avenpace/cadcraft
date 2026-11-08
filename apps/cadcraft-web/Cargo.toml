@@ -30,6 +30,8 @@ serde_json = { workspace = true }
 web-sys = { version = "0.3", features = ["HtmlInputElement", "FileList", "File"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+# The page command API, `window.cadcraft` (src/api.rs): one surface for every Craft web build.
+craft-web-api = { git = "https://github.com/storytold/craft-libs", rev = "2e2312ddaf21bc3d85cd3395d0955c7d239306f6", version = "0.1.0" }
 eframe = { workspace = true, features = ["persistence", "wgpu", "accesskit"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"

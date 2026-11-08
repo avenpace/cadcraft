@@ -3,7 +3,8 @@
 //! Runs the same [`cadcraft_ui_egui::CadApp`] as the desktop app through eframe's web runner
 //! (wgpu: WebGPU where available, WebGL2 otherwise). Build with `trunk build --release` from this
 //! directory (output in `dist/web`). URL flags: `?webgl` forces WebGL2, `?cpu` draws the drawing
-//! with egui shapes instead of the GPU canvas, `?sample` opens the sample drawing. Saving downloads
+//! with egui shapes instead of the GPU canvas, `?sample` opens the sample drawing, `?control`
+//! installs `window.cadcraft`, the page's command API (`api.rs`). Saving downloads
 //! the drawing through the browser (`download.rs`). With `?host=parent` (inside an `<iframe>`), a
 //! same-origin parent page sends the drawing to open and stores what CADCraft saves instead
 //! (`host.rs`); a page can also host CADCraft in its own document (no iframe) with
@@ -11,9 +12,11 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 #[cfg(target_arch = "wasm32")]
-pub mod download;
+mod api;
 #[cfg(target_arch = "wasm32")]
 mod clawku_pick;
+#[cfg(target_arch = "wasm32")]
+pub mod download;
 #[cfg(target_arch = "wasm32")]
 mod host;
 
@@ -23,7 +26,7 @@ mod panel_layout;
 #[cfg(target_arch = "wasm32")]
 mod web {
     use cadcraft_engine::Session;
-    use cadcraft_ui_egui::{CadApp, Services};
+    use cadcraft_ui_egui::{CadApp, ControlRequest, Services};
     use wasm_bindgen::JsCast as _;
 
     const CANVAS_ID: &str = "cadcraft_canvas";
@@ -33,8 +36,16 @@ mod web {
     /// host page (`?host=parent`, or `data-host="page"` on the canvas), the browser's
     /// `prefers-reduced-motion` (it stays
     /// live, so View ▸ Accessibility ▸ Animation Effects ▸ Use System Setting follows a change),
-    /// and the document title last written to the page.
-    struct Shell(CadApp, crate::upload::Inbox, Option<crate::host::Bridge>, Option<web_sys::MediaQueryList>, Option<String>);
+    /// the document title last written to the page, and the sender for the page's control
+    /// requests (`?control`, `api`).
+    struct Shell(
+        CadApp,
+        crate::upload::Inbox,
+        Option<crate::host::Bridge>,
+        Option<web_sys::MediaQueryList>,
+        Option<String>,
+        Option<std::sync::mpsc::Sender<ControlRequest>>,
+    );
 
     impl eframe::App for Shell {
         /// Runs one frame: takes in files dropped on or picked for the page, drains the background
@@ -46,6 +57,13 @@ mod web {
             // input and are read from `ui` only.
             self.1.drain(&mut self.0);
             self.0.system_animations = self.3.as_ref().map(|reduced| !reduced.matches());
+            // The page's control requests (`?control`) enter the app's channel before `logic`
+            // drains it each frame; `api::connect`'s repaint makes an idle tab take them at once.
+            if let Some(tx) = &self.5 {
+                for req in crate::api::take_requests() {
+                    let _ = tx.send(req);
+                }
+            }
             self.0.logic(ctx);
             let drawing = self.0.session.state().ok();
             crate::push_title(&mut self.4, drawing.map(|d| d.title.as_str()), drawing.is_some_and(|d| d.is_dirty()), set_page_title);
@@ -187,6 +205,20 @@ mod web {
                         if query().contains("sample") {
                             let _ = app.run("ui.sample", serde_json::json!({}));
                         }
+                        // `?control`: `window.cadcraft`, the page's command API (`api`), opt-in.
+                        // The requests it queues reach the app through the control channel, as
+                        // the desktop control server's do.
+                        let control = if crate::wants_control(&query()) {
+                            crate::api::connect(cc.egui_ctx.clone());
+                            if let Err(e) = crate::api::install() {
+                                log::error!("couldn't install window.cadcraft: {e:?}");
+                            }
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            app = app.with_control(rx);
+                            Some(tx)
+                        } else {
+                            None
+                        };
                         // No paths on the web: OPEN asks the browser's file picker, which reads the
                         // chosen file in the background (`upload.rs`), so the picker returns none.
                         let inbox = crate::upload::Inbox::new(&cc.egui_ctx);
@@ -200,7 +232,7 @@ mod web {
                             bridge.post_ready();
                         });
                         let reduced_motion = web_sys::window().and_then(|w| w.match_media("(prefers-reduced-motion: reduce)").ok().flatten());
-                        Ok(Box::new(Shell(app, inbox, host, reduced_motion, None)))
+                        Ok(Box::new(Shell(app, inbox, host, reduced_motion, None, control)))
                     }),
                 )
                 .await;
@@ -210,9 +242,7 @@ mod web {
             if let Some(el) = document.get_element_by_id(LOADING_ID) {
                 match result {
                     Ok(()) => el.remove(),
-                    Err(e) => {
-                        el.set_inner_html(&format!("<p>ClawCAD failed to start: {e:?}</p><p>A browser with WebGPU or WebGL2 is required.</p>"))
-                    }
+                    Err(e) => el.set_inner_html(&format!("<p>ClawCAD failed to start: {e:?}</p><p>A browser with WebGPU or WebGL2 is required.</p>")),
                 }
             }
         });
@@ -223,6 +253,13 @@ mod web {
 #[cfg(any(target_arch = "wasm32", test))]
 fn wants_cpu(query: &str) -> bool {
     query.trim_start_matches('?').split('&').any(|p| p == "cpu" || p.starts_with("cpu="))
+}
+
+/// True when the URL query (`?control&sample`) has a `control` flag: the page's command API,
+/// `window.cadcraft` (`api`), is installed only when the page asks for it.
+#[cfg(any(target_arch = "wasm32", test))]
+fn wants_control(query: &str) -> bool {
+    query.trim_start_matches('?').split('&').any(|p| p == "control" || p.starts_with("control="))
 }
 
 /// The browser tab title: the open drawing's file name, a bullet once it has unsaved changes,
@@ -278,7 +315,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{document_title, push_title, title_to_send, wants_cpu};
+    use super::{document_title, push_title, title_to_send, wants_control, wants_cpu};
 
     /// Guards the `?cpu` URL flag: only a whole `cpu` query parameter (bare or with a value)
     /// selects the CPU canvas, so `?sample` and `?gpucpu` stay on the GPU path.
@@ -291,6 +328,18 @@ mod tests {
         assert!(!wants_cpu("?sample"));
         assert!(!wants_cpu("?webgl&sample"));
         assert!(!wants_cpu("?gpucpu"));
+    }
+
+    /// Guards the `?control` URL flag: only a whole `control` query parameter (bare or with a
+    /// value) installs the page API, so `?sample` and `?controller` stay without one.
+    #[test]
+    fn control_flag_is_detected() {
+        assert!(wants_control("?control"));
+        assert!(wants_control("?control=1&sample"));
+        assert!(wants_control("?sample&control"));
+        assert!(!wants_control(""));
+        assert!(!wants_control("?sample"));
+        assert!(!wants_control("?controller"));
     }
 
     /// Guards the tab title text: a drawing contributes its name and, when dirty, a trailing

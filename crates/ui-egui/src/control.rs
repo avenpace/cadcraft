@@ -25,7 +25,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::time::Duration;
 
 use cadcraft_engine::Input;
@@ -70,6 +70,26 @@ pub struct PendingReply {
 }
 
 impl PendingReply {
+    /// The reply once the app has sent it, without waiting for one: `None` while the request is
+    /// still queued or running. A request dropped without a reply (skipped by the app, or its
+    /// sender gone) answers the protocol's error object instead, so a caller that polls rather
+    /// than blocks — the web shell's page API — is never left waiting on a request that will
+    /// never answer.
+    pub fn try_take(&mut self) -> Option<ControlResponse> {
+        match self.rx.try_recv() {
+            Ok(reply) => Some(reply),
+            Err(TryRecvError::Disconnected) => Some(json!({"ok": false, "error": "request dropped"})),
+            Err(TryRecvError::Empty) => None,
+        }
+    }
+
+    /// Give up on the request without waiting for it: cancelled here, the app skips it if it had
+    /// not started it (`ControlRequest::begin` fails), exactly as a [`Self::wait`] timeout does.
+    /// The web shell calls this when the page's own timeout fired first.
+    pub fn cancel_if_open(&self) {
+        let _ = self.state.compare_exchange(QUEUED, CANCELLED, Ordering::AcqRel, Ordering::Acquire);
+    }
+
     /// The reply, or after `timeout` an error that says whether the request can still have
     /// changed anything:
     /// - `{"ok": false, "error": "timeout", "state": "not-run"}`: the app had not started it, and
@@ -788,6 +808,35 @@ mod tests {
         assert!(req.begin());
         let _ = req.reply.send(json!({"ok": true}));
         assert_eq!(pending.wait(Duration::ZERO), json!({"ok": true}));
+    }
+
+    /// The web shell polls instead of blocking: `None` while the request is queued or running,
+    /// the reply itself once sent.
+    #[test]
+    fn polled_reply_arrives_without_waiting() {
+        let (req, mut pending) = ControlRequest::new("engine.execute", json!({}));
+        assert_eq!(pending.try_take(), None);
+        assert!(req.begin());
+        let _ = req.reply.send(json!({"ok": true, "result": 1}));
+        assert_eq!(pending.try_take(), Some(json!({"ok": true, "result": 1})));
+    }
+
+    /// A request the app dropped unanswered polls as the protocol's error object, not `None`
+    /// forever: the caller is told it failed instead of waiting for a reply that never comes.
+    #[test]
+    fn dropped_request_polls_as_an_error() {
+        let (req, mut pending) = ControlRequest::new("engine.execute", json!({}));
+        drop(req);
+        assert_eq!(pending.try_take(), Some(json!({"ok": false, "error": "request dropped"})));
+    }
+
+    /// A caller that gave up (the page's timeout fired) cancels a request the app has not
+    /// started: the client was told it did not run, so the app must not run it late.
+    #[test]
+    fn giving_up_on_an_unstarted_request_cancels_it() {
+        let (req, pending) = ControlRequest::new("engine.execute", json!({}));
+        pending.cancel_if_open();
+        assert!(!req.begin());
     }
 
     /// Two pathless saves with the same token produce distinct, decodable PNGs; on Unix the files are 0600 and their directory 0700.
