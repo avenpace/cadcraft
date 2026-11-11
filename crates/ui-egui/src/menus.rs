@@ -718,6 +718,10 @@ pub fn tree(app: &CadApp) -> Vec<(String, Vec<Entry>)> {
         let at = file.iter().position(|e| matches!(e, Entry::Item { id, .. } if id == "open")).map_or(0, |i| i + 1);
         file.insert(at, Entry::Sub { label: OPEN_RECENT.into(), children: recent_entries(app) });
     }
+    // Hosted, a menu left with nothing (Help: Clawku gives help) is not shown at all.
+    if hosted {
+        out.retain(|(_, entries)| !entries.is_empty());
+    }
     for (menu, entries) in &mut out {
         if let Some(r) = reference().iter().find(|r| r.label == menu) {
             order(entries, &r.children);

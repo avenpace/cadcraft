@@ -41,9 +41,14 @@ const TOOLBAR: &[&[(Icon, &str, &str, Option<&str>)]] = &[
 ];
 
 /// The tool bar's groups; hosted (Clawku), without New Drawing and the other buttons that make
-/// or need another drawing ([`crate::hosted::hides`]).
+/// or need another drawing, and without the Help button ([`crate::hosted::hides`]); a group left
+/// empty is dropped, so no gap is left where it was.
 fn toolbar_groups(hosted: bool) -> Vec<Vec<(Icon, &'static str, &'static str, Option<&'static str>)>> {
-    TOOLBAR.iter().map(|group| group.iter().copied().filter(|(_, cmd, _, _)| !(hosted && crate::hosted::hides(cmd))).collect()).collect()
+    TOOLBAR
+        .iter()
+        .map(|group| group.iter().copied().filter(|(_, cmd, _, _)| !(hosted && crate::hosted::hides(cmd))).collect::<Vec<_>>())
+        .filter(|group| !group.is_empty())
+        .collect()
 }
 
 /// Height of the macOS integrated title row (#161). AppKit draws the traffic lights itself,

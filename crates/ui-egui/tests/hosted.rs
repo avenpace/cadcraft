@@ -1,7 +1,8 @@
 //! Hosted by a page that owns the files (Clawku, `Services::hosted`): one drawing, no New, Close,
 //! Start page or Open Recent; Save hands the drawing back under the name the page sent, Save As
 //! is marked as one; Share goes to the page; IMPORT and a linetype file use the browser's own
-//! picker, never the page's open picker. Not hosted, the menus keep all of it.
+//! picker, never the page's open picker; there is no Help at all (Clawku gives it). Not hosted,
+//! the menus keep all of it.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -9,9 +10,11 @@ use std::rc::Rc;
 use cadcraft_engine::Session;
 use cadcraft_engine::cmd::file::{IoHooks, set_io};
 use cadcraft_engine::doc::Drawing;
-use cadcraft_ui_egui::hosted::Upload;
+use cadcraft_ui_egui::hosted::{HELP_MSG, Upload};
 use cadcraft_ui_egui::menus::{Entry, OPEN_RECENT, tree};
 use cadcraft_ui_egui::{CadApp, Services};
+use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
 use serde_json::json;
 
 /// What the hosted app asked of its page.
@@ -174,4 +177,73 @@ fn hosted_app_keeps_one_drawing_saves_under_the_page_name_and_routes_share_and_i
     let _ = app.run("close", json!({ "index": 1 }));
     assert_eq!(app.session.docs.len(), 1);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The real window (menu bar and tool bar painted), wide enough that no tool bar button
+/// overflows into "More toolbar commands", with one drawing open.
+fn window(app: CadApp) -> Harness<'static, CadApp> {
+    let mut app = app;
+    app.run("new", json!({})).unwrap();
+    app.ui.start_tab = false;
+    app.ui.in_window_menu = true;
+    let mut h = Harness::builder().with_size(egui::vec2(1800.0, 900.0)).build_ui_state(
+        |ui, app: &mut CadApp| {
+            app.logic(&ui.ctx().clone());
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(5);
+    h
+}
+
+/// Hosted, there is no Help anywhere: no Help menu (About included) in the menu tree or the
+/// painted menu bar, no Help (?) button on the tool bar; F1 and HELP, ? or ABOUT typed open
+/// nothing and say help is in Clawku. Not hosted, the Help menu, About and the button stay.
+#[test]
+fn hosted_has_no_help_menu_button_or_command() {
+    let (mut app, _) = hosted_app();
+    assert!(!tree(&app).iter().any(|(m, _)| m == "Help"), "hosted menu bar has a Help menu");
+    let shown = menu_ids(&app);
+    for id in ["ui.dialog.about", "ui.dialog.commands", "ui.updates.check", "ui.sample"] {
+        assert!(!shown.iter().any(|s| s == id), "hosted menus show {id}");
+    }
+    let _ = app.run("new", json!({}));
+    for typed in ["help", "HELP", "?", "about", "ui.dialog.commands", "ui.dialog.about"] {
+        app.session.log.clear();
+        assert!(app.cmdline(typed).is_none(), "{typed} was refused as unknown");
+        assert_eq!(app.ui.dialog, None, "{typed} opened a dialog");
+        assert!(app.session.log.iter().any(|l| l == HELP_MSG), "{typed} said {:?}", app.session.log);
+    }
+    // F1 runs its menu command, which says the same.
+    app.start("ui.dialog.commands");
+    assert_eq!(app.ui.dialog, None, "F1 opened the Command Reference");
+
+    let h = window(hosted_app().0);
+    assert_eq!(h.query_all_by_label_contains("Help").count(), 0, "the hosted window shows Help");
+    assert!(h.query_by_label("File").is_some(), "the hosted window has no menu bar");
+
+    let standalone = CadApp::new(Session::empty(), Services::default());
+    let help = tree(&standalone).into_iter().find(|(m, _)| m == "Help").map(|(_, e)| e).unwrap_or_default();
+    let mut help_ids = Vec::new();
+    ids(&help, &mut help_ids);
+    for id in ["ui.dialog.about", "ui.dialog.commands", "ui.sample"] {
+        assert!(help_ids.iter().any(|s| s == id), "standalone Help menu lost {id}");
+    }
+    let h = window(CadApp::new(Session::empty(), Services::default()));
+    assert!(h.query_all_by_label("Help").count() >= 2, "standalone window lost the Help menu or button");
+}
+
+/// Hosted, the tool bar's first button (Open) asks the page for a document (`pick_open`, which
+/// the web shell posts as `cadcraft:pick` with purpose "document"), never anything else.
+#[test]
+fn hosted_toolbar_open_asks_the_page() {
+    let (app, told) = hosted_app();
+    let mut h = window(app);
+    let open = h.query_all_by_label_contains("Open (").next().expect("the hosted tool bar has no Open button");
+    open.click();
+    h.run_steps(3);
+    assert_eq!(told.borrow().opens, 1, "Open did not ask the page");
+    assert!(told.borrow().uploads.is_empty(), "Open used the browser's own picker");
+    assert_eq!(h.state().session.docs.len(), 1);
 }

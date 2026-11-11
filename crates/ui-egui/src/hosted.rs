@@ -9,6 +9,8 @@
 //! - Save hands the drawing back under the name the page sent; Save As under the same name,
 //!   marked as a Save As (the page asks for the new name) ([`save`]).
 //! - Share asks the page to share it ([`crate::Services::share`]).
+//! - Help is the page's too: the Help menu (About included), the tool bar's Help button and F1
+//!   are gone, and HELP, ? or ABOUT typed say help is in Clawku ([`HELP`]).
 //! - IMPORT and a linetype file come from the browser's own file picker
 //!   ([`crate::Services::pick_upload`], [`CadApp::receive_upload`]): only opening a drawing goes
 //!   to the page.
@@ -61,6 +63,13 @@ const HIDDEN: &[&str] = &[
 /// Hidden too: what the hosted web build can't do at all (a 3D mouse needs the desktop app).
 const DESKTOP_ONLY: &[&str] = &["ui.spacemouse", "ui.spacemouse.calibrate", "ui.spacemouse.navigate"];
 
+/// Hidden too: help, which Clawku gives (the Help menu, About included, the tool bar's Help button,
+/// F1). Typed (HELP, ?, ABOUT) they say where help is instead of running.
+const HELP: &[&str] = &["ui.dialog.about", "ui.dialog.commands", "ui.updates.check", "help", "?", "about"];
+
+/// What a hidden help command says, typed or from F1.
+pub const HELP_MSG: &str = "Help for ClawCAD is in Clawku";
+
 /// File ▸ Share..., added to the File menu when hosted.
 pub const SHARE_ID: &str = "share";
 pub const SHARE_LABEL: &str = "Share...";
@@ -69,7 +78,7 @@ pub const SHARE_LABEL: &str = "Share...";
 /// files are hidden with Open Recent).
 pub fn hides(id: &str) -> bool {
     let id = cadcraft_engine::cmd::resolve_alias(id);
-    HIDDEN.contains(&id.as_str()) || DESKTOP_ONLY.contains(&id.as_str()) || id.starts_with("ui.recent.")
+    HIDDEN.contains(&id.as_str()) || DESKTOP_ONLY.contains(&id.as_str()) || HELP.contains(&id.as_str()) || id.starts_with("ui.recent.")
 }
 
 /// A user's command (no parameters) in a hosted app: a hidden one says the page manages files,
@@ -94,7 +103,9 @@ pub(crate) fn route(app: &mut CadApp, id: &str, params: &Value) -> Option<Result
     }
     if hides(id) {
         let name = id.trim_start_matches("ui.").to_ascii_uppercase();
-        let msg = if DESKTOP_ONLY.contains(&id) {
+        let msg = if HELP.contains(&cadcraft_engine::cmd::resolve_alias(id).as_str()) {
+            HELP_MSG.to_string()
+        } else if DESKTOP_ONLY.contains(&id) {
             format!("{name}: not available here")
         } else {
             format!("{name}: the page that hosts ClawCAD manages the drawing files")
