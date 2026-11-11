@@ -134,8 +134,14 @@ fn linetype(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
                         action = Some(("linetype", json!({ "load": n })));
                     }
                 }
-                // The user's own .lin file (where the host has a file picker).
-                if let Some(pick) = app.services.pick_open.as_ref() {
+                // The user's own .lin file: the browser's own picker where opening belongs to the
+                // host page (it loads when read), else the host's file picker where there is one.
+                if let Some(pick) = app.services.pick_upload.as_ref() {
+                    ui.separator();
+                    if ui.selectable_label(false, "From File...").clicked() {
+                        pick(crate::hosted::Upload::Linetype);
+                    }
+                } else if let Some(pick) = app.services.pick_open.as_ref() {
                     ui.separator();
                     if ui.selectable_label(false, "From File...").clicked()
                         && let Some(path) = pick()
@@ -1039,6 +1045,28 @@ fn plot(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) -> Action {
     }
     if ok {
         let mut params = plot_params(&st, None);
+        // Where the page prints (hosted, Clawku), Print prints: the plotted sheet goes to the
+        // browser's print dialog instead of being stored as a file.
+        if app.services.print.is_some() {
+            *open = false;
+            let title = app.session.state().map(|s| s.title.clone()).unwrap_or_default();
+            let stem = std::path::Path::new(&title).file_stem().map(|s| s.to_string_lossy().to_string()).filter(|s| !s.is_empty());
+            let name = format!("{}-{}.{ext}", stem.unwrap_or_else(|| "Drawing".into()), st.target);
+            let printed = app.run("plot", params).and_then(|r| {
+                let bytes = r["data"].as_str().and_then(cadcraft_engine::cmd::file::base64_decode).ok_or("the plot has no data")?;
+                app.services.print.as_ref().map_or(Ok(()), |print| print(&name, &bytes))
+            });
+            match printed {
+                Ok(()) => app.session.echo(format!("Printing {}", st.target)),
+                // `run` echoed a plot error; a print error is echoed here. Either way the
+                // dialog stays open to fix the settings.
+                Err(e) => {
+                    app.session.echo(e);
+                    *open = true;
+                }
+            }
+            return action;
+        }
         if let Some(pick) = app.services.pick_save.as_ref() {
             let title = app.session.state().map(|s| s.title.clone()).unwrap_or_default();
             let stem = std::path::Path::new(&title).file_stem().map(|s| s.to_string_lossy().to_string()).filter(|s| !s.is_empty());

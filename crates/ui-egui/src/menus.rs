@@ -150,6 +150,11 @@ pub fn run_ui_command(app: &mut CadApp, id: &str, params: &Value) -> Option<Resu
 }
 
 fn route_ui_subsystems(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
+    // Hosted (Clawku): the page owns the files, so New, Close and the Start page say so, Save As
+    // goes to the page and Share asks it. Nothing changes when not hosted.
+    if let Some(result) = crate::hosted::route(app, id, params) {
+        return Some(result);
+    }
     if let Some(result) = crate::spacemouse::route(app, id, params) {
         return Some(result);
     }
@@ -369,6 +374,10 @@ fn should_pick_file_path(id: &str, params: &Value) -> bool {
 /// content asks first. `None` lets the engine save. JSON calls carry params and never get here;
 /// they report the loss in their result instead.
 fn user_qsave(app: &mut CadApp) -> Option<Result<Value, String>> {
+    // Hosted: back to the page under the name it sent, never a name dialog.
+    if app.services.hosted {
+        return Some(crate::hosted::save(app, false));
+    }
     if app.session.state().is_ok_and(|s| s.path.is_none()) {
         return run_ui_command(app, "ui.saveas", &Value::Null);
     }
@@ -687,17 +696,25 @@ pub fn tree(app: &CadApp) -> Vec<(String, Vec<Entry>)> {
             }
         }
     };
+    // Hosted (Clawku), every item that makes, shows or closes another drawing is left out.
+    let hosted = app.services.hosted;
+    let shown = |id: &str| !hosted || !crate::hosted::hides(id);
     for c in cadcraft_engine::command_specs() {
-        if !c.menu.is_empty() {
+        if !c.menu.is_empty() && shown(c.id) {
             add(c.menu, c.label, c.id, c.shortcut, (c.enabled)(&app.session).is_ok());
         }
     }
     for (id, label, menu, sc) in UI_COMMANDS {
-        if !menu.is_empty() {
+        if !menu.is_empty() && shown(id) {
             add(menu, label, id, *sc, true);
         }
     }
-    if let Some((_, file)) = out.iter_mut().find(|(m, _)| m == "File") {
+    if hosted {
+        add(&["File", crate::hosted::SHARE_LABEL], crate::hosted::SHARE_LABEL, crate::hosted::SHARE_ID, None, app.session.state().is_ok());
+    }
+    if let Some((_, file)) = out.iter_mut().find(|(m, _)| m == "File")
+        && !hosted
+    {
         let at = file.iter().position(|e| matches!(e, Entry::Item { id, .. } if id == "open")).map_or(0, |i| i + 1);
         file.insert(at, Entry::Sub { label: OPEN_RECENT.into(), children: recent_entries(app) });
     }

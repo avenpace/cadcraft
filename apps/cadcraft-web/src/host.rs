@@ -13,13 +13,15 @@
 //!   File › Open or dropped on the window; an oversized drawing is refused before it is copied.
 //! - `cadcraft:save` (to the host): `{ name, saveAs, bytes }` for every file CADCraft would
 //!   otherwise download (SAVE, SAVEAS, exports): it replaces the engine's delivery hook. The host
-//!   stores the file and reports failures itself. CADCraft doesn't tell the host which saves
-//!   make a file the document, so `saveAs` is always `false`.
+//!   stores the file and reports failures itself. `saveAs` is `true` only for the hosted app's
+//!   Save As (Clawku: the drawing under its current name; the host asks for the new one,
+//!   [`mark_save_as`]); Save, and every other file (exports, plots), say `false`: Save under the
+//!   name the host sent, the others under their own names, which the host stores beside it.
 //! - `cadcraft:dirty` whenever unsaved changes appear or go away, `cadcraft:failed` when the app
 //!   couldn't start.
 //!
-//! In both host modes the app starts on the Start tab rather than an empty Drawing1, and the
-//! host guards leaving the page.
+//! In both host modes the app starts without a drawing rather than an empty Drawing1 (hosted by
+//! Clawku without the Start page either), and the host guards leaving the page.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -36,6 +38,14 @@ const DEFAULT_NAME: &str = "Drawing.dxf";
 thread_local! {
     /// The bridge [`deliver`] posts through (the engine's hook is a plain `fn`).
     static BRIDGE: RefCell<Option<Bridge>> = const { RefCell::new(None) };
+    /// A Save As is delivering now ([`mark_save_as`]): its file goes with `saveAs: true`.
+    static SAVE_AS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The hosted app's Save As hook (`Services::host_save_as`): `true` right before it saves the
+/// drawing, `false` right after, so only that delivery tells the host it is a Save As.
+pub fn mark_save_as(on: bool) {
+    SAVE_AS.with(|s| s.set(on));
 }
 
 #[derive(Clone)]
@@ -80,8 +90,8 @@ impl Bridge {
         self.host.post_dirty(app.session.docs.iter().any(|d| d.is_dirty()));
     }
 
-    fn post_save(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
-        self.host.post_save(name, bytes, None, false)
+    fn post_save(&self, name: &str, bytes: &[u8], save_as: bool) -> Result<(), String> {
+        self.host.post_save(name, bytes, None, save_as)
     }
 }
 
@@ -89,7 +99,7 @@ impl Bridge {
 /// the file to the host page. `Ok` once it was sent; the engine then counts a drawing as saved.
 pub fn deliver(name: &str, _mime: &str, bytes: &[u8]) -> Result<(), String> {
     let bridge = BRIDGE.with(|b| b.borrow().clone()).ok_or("the page that embeds ClawCAD is gone")?;
-    bridge.post_save(name, bytes)
+    bridge.post_save(name, bytes, SAVE_AS.with(std::cell::Cell::get))
 }
 
 /// The `cadcraft:open` payload, `{ name, bytes }` where `bytes` holds a drawing: it opens like a

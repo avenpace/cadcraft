@@ -223,16 +223,23 @@ fn files(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {
         ui.end_row();
         units_row(ui, app, changes);
         ui.end_row();
-        autosave_row(ui, changes);
-        ui.end_row();
-        backup_row(ui, changes);
-        ui.end_row();
-        savefile_row(ui, changes);
-        ui.end_row();
+        // No file system (the web): nothing saves automatically, keeps a .bak or has a folder.
+        if !app.services.no_file_system {
+            autosave_row(ui, changes);
+            ui.end_row();
+            backup_row(ui, changes);
+            ui.end_row();
+            savefile_row(ui, changes);
+            ui.end_row();
+        }
     });
     hint(ui, crate::tl!("New and the first drawing at startup use these units unless a default template is set (QNEWTEMPLATE)."));
     hint(ui, crate::tl!("A drawing opened from a file keeps that file's format."));
-    hint(ui, crate::tl!("Drawings with no file yet are saved in the default version. 0 minutes turns automatic save off."));
+    if app.services.no_file_system {
+        hint(ui, crate::tl!("Drawings with no file yet are saved in the default version."));
+    } else {
+        hint(ui, crate::tl!("Drawings with no file yet are saved in the default version. 0 minutes turns automatic save off."));
+    }
 }
 
 fn save_format_row(ui: &mut egui::Ui, app: &CadApp, changes: &mut Map<String, Value>) {

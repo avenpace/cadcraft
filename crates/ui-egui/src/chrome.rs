@@ -40,6 +40,12 @@ const TOOLBAR: &[&[(Icon, &str, &str, Option<&str>)]] = &[
     &[(Icon::Help, "ui.dialog.about", "Help", None)],
 ];
 
+/// The tool bar's groups; hosted (Clawku), without New Drawing and the other buttons that make
+/// or need another drawing ([`crate::hosted::hides`]).
+fn toolbar_groups(hosted: bool) -> Vec<Vec<(Icon, &'static str, &'static str, Option<&'static str>)>> {
+    TOOLBAR.iter().map(|group| group.iter().copied().filter(|(_, cmd, _, _)| !(hosted && crate::hosted::hides(cmd))).collect()).collect()
+}
+
 /// Height of the macOS integrated title row (#161). AppKit draws the traffic lights itself,
 /// centred in the standard 28 pt title-bar band at the top of the window; moving them would take
 /// AppKit calls (`unsafe`, which the workspace forbids). So the title row is that band, and what
@@ -87,15 +93,16 @@ pub fn title_and_toolbar(app: &mut CadApp, ui: &mut egui::Ui) {
             let size = 26.0;
             let mut clicked = None;
             let mac = ui.ctx().os().is_mac();
-            let widths: Vec<_> = TOOLBAR.iter().map(|group| group.len() as f32 * (size + 6.0) - 6.0).collect();
+            let groups = toolbar_groups(app.services.hosted);
+            let widths: Vec<_> = groups.iter().map(|group| group.len() as f32 * (size + 6.0) - 6.0).collect();
             let available = (row.right() - 12.0 - x).max(0.0);
             let Some(fit) = craft_ui::layout::fit_toolbar(&widths, available, 24.0, 30.0) else {
                 // Very small windows still expose the complete command row by scrolling.
                 ui.scope_builder(egui::UiBuilder::new().max_rect(row.shrink2(vec2(4.0, 0.0))), |ui| {
                     egui::ScrollArea::horizontal().id_salt("toolbar_small").show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            for group in TOOLBAR {
-                                for (icon, cmd, tip, _) in *group {
+                            for group in &groups {
+                                for (icon, cmd, tip, _) in group {
                                     if icons::button(ui, *icon, size, tip, false).clicked() {
                                         clicked = Some(*cmd);
                                     }
@@ -111,7 +118,7 @@ pub fn title_and_toolbar(app: &mut CadApp, ui: &mut egui::Ui) {
                 return;
             };
             for (index, _) in &fit.shown {
-                let Some(group) = TOOLBAR.get(*index) else { continue };
+                let Some(group) = groups.get(*index) else { continue };
                 for (icon, cmd, label, shortcut) in group.iter() {
                     let br = Rect::from_min_size(pos2(x, row.center().y - size / 2.0), vec2(size, size));
                     let resp = ui.interact(br, ui.scope_id().with(("tb", *cmd)), Sense::click());
@@ -143,11 +150,11 @@ pub fn title_and_toolbar(app: &mut CadApp, ui: &mut egui::Ui) {
                 icons::describe_control(ui, &response, "More toolbar commands", None, false);
                 egui::Popup::menu(&response).show(|ui| {
                     for (position, index) in fit.overflow.iter().enumerate() {
-                        let Some(group) = TOOLBAR.get(*index) else { continue };
+                        let Some(group) = groups.get(*index) else { continue };
                         if position > 0 {
                             ui.separator();
                         }
-                        for (_, command, label, _) in *group {
+                        for (_, command, label, _) in group {
                             let response = ui.button(crate::i18n::t(label));
                             crate::control::record_widget(ui, &response, label, "button", None);
                             if response.clicked() {
@@ -525,6 +532,15 @@ pub fn status_bar(app: &mut CadApp, ui: &mut egui::Ui) {
         }
         draw_status_toggles(app, ui, &p, t, &toggles, (r, rx, size));
     });
+}
+
+/// Hosted (Clawku) before the page's drawing has arrived: a plain canvas with one line, never the
+/// Start page with New and Open.
+pub fn waiting_page(ui: &mut egui::Ui) {
+    let t = Tokens::get();
+    let r = ui.max_rect();
+    ui.painter().rect_filled(r, 0.0, t.chrome);
+    ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, crate::tl!("Opening the drawing…"), crate::theme::body(), t.text_dim);
 }
 
 /// The Start page (no drawing open, or the Start tab).

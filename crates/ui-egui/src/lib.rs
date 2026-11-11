@@ -36,6 +36,8 @@ pub mod fault;
 // The Find and Replace window behind the FIND command.
 pub mod finddlg;
 pub mod hatchdlg;
+// Running inside a page that owns the files (Clawku): one drawing, the host's Save and Share.
+pub mod hosted;
 mod mtext_editor;
 mod panel_state;
 pub mod spacemouse;
@@ -236,6 +238,24 @@ pub struct Services {
     pub no_file_system: bool,
     /// Pick a `.pgp` alias file, starting in the folder given (the last import's).
     pub pick_pgp: Option<Box<dyn Fn(Option<&str>) -> Option<String>>>,
+    /// A page that owns the files runs the app (Clawku: the web build framed with
+    /// `?host=parent&open=host`). It keeps the file list, New, Close, Share and versions, so the
+    /// app shows the one drawing it was sent and hides every way to make, switch to or close
+    /// another ([`hosted`]). `false` everywhere else, where nothing changes.
+    pub hosted: bool,
+    /// Hosted: Save As hands the drawing to the host under its current name, marked as a Save As
+    /// (the host asks for the new name itself). Called with `true` just before that save and with
+    /// `false` right after it, so only that one delivery is marked.
+    pub host_save_as: Option<Box<dyn Fn(bool)>>,
+    /// Hosted: Share asks the host page to share the drawing.
+    pub share: Option<Box<dyn Fn()>>,
+    /// The browser's own file picker for a file that is not a drawing to open (IMPORT's drawing,
+    /// a `.lin` file). It returns at once; the chosen file arrives through
+    /// [`CadApp::receive_upload`]. Set where the open picker belongs to the host page.
+    pub pick_upload: Option<Box<dyn Fn(hosted::Upload)>>,
+    /// Print a plotted sheet (`name`, its bytes) with the browser's print dialog instead of
+    /// saving it as a file.
+    pub print: Option<Box<dyn Fn(&str, &[u8]) -> Result<(), String>>>,
 }
 
 pub struct CadApp {
@@ -919,16 +939,21 @@ impl CadApp {
         if self.ui.show_status_bar {
             chrome::status_bar(self, ui);
         }
-        if self.ui.show_file_tabs {
+        // Hosted (Clawku) there is one drawing: no file tabs (their "+", Start and ×) and no
+        // Start page, not even before the page's drawing has arrived.
+        let hosted = self.services.hosted;
+        if self.ui.show_file_tabs && !hosted {
             chrome::file_tabs(self, ui);
         }
-        let has_doc = !self.session.docs.is_empty() && !self.ui.start_tab;
+        let has_doc = !self.session.docs.is_empty() && (hosted || !self.ui.start_tab);
         if has_doc && !self.ui.show_toolsets {
             palettes::toolsets_strip(self, ui);
         }
         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |ui| {
             if has_doc {
                 docking::show(self, ui);
+            } else if hosted {
+                chrome::waiting_page(ui);
             } else {
                 chrome::start_page(self, ui);
             }

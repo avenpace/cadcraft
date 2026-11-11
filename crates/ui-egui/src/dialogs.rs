@@ -25,7 +25,7 @@ pub fn show(app: &mut CadApp, ctx: &egui::Context) {
         "aliasedit" => crate::aliasdlg::dialog(app, ctx, &mut open),
         "find" => crate::finddlg::dialog(app, ctx, &mut open),
         crate::keys::DIALOG => crate::keys::dialog(app, ctx, &mut open),
-        "about" => about(ctx, &mut open),
+        "about" => about(ctx, &mut open, app.services.hosted),
         "preview" => crate::exchange::dialog(app, ctx, &mut open),
         "commands" => commands(app, ctx, &mut open),
         "blocks" => blocks(app, ctx, &mut open),
@@ -321,7 +321,9 @@ fn units(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
 }
 
 /// About window with About, Contributors and Models tabs, version, licence and project links.
-fn about(ctx: &egui::Context, open: &mut bool) {
+/// Hosted (Clawku) it keeps the name, version and licence but drops the community links and the
+/// Contributors tab (its names link to GitHub profiles).
+fn about(ctx: &egui::Context, open: &mut bool, hosted: bool) {
     let t = Tokens::get();
     let tab_id = egui::Id::unique("about_tab");
     egui::Window::new(crate::tl!("About ClawCAD"))
@@ -333,6 +335,9 @@ fn about(ctx: &egui::Context, open: &mut bool) {
             let mut tab = ui.data_mut(|d| d.get_temp::<u8>(tab_id)).unwrap_or(0);
             ui.horizontal(|ui| {
                 for (i, l) in ["About", "Contributors", "Models"].iter().enumerate() {
+                    if hosted && i == 1 {
+                        continue;
+                    }
                     if ui.selectable_label(tab == i as u8, crate::i18n::t(l)).clicked() {
                         tab = i as u8;
                     }
@@ -341,7 +346,7 @@ fn about(ctx: &egui::Context, open: &mut bool) {
             ui.data_mut(|d| d.insert_temp(tab_id, tab));
             ui.separator();
             match tab {
-                1 => crate::credits::contributors_ui(ui),
+                1 if !hosted => crate::credits::contributors_ui(ui),
                 2 => crate::credits::models_ui(ui),
                 _ => {
                     ui.heading(crate::tl!("ClawCAD"));
@@ -349,8 +354,10 @@ fn about(ctx: &egui::Context, open: &mut bool) {
                     ui.label(crate::tl!("Computer-aided design and drafting: an open-source, clean-room CAD application written in pure Rust."));
                     ui.add_space(6.0);
                     ui.label(RichText::new(crate::tl!("Based on the Crafting Apps by the ArtCraft team and community (MIT OR Apache-2.0).")).color(t.text_dim));
-                    ui.hyperlink_to("clawku.id", "https://clawku.id/");
-                    ui.hyperlink_to(crate::tl!("Join the Clawku community"), "https://clawku.id/");
+                    if !hosted {
+                        ui.hyperlink_to("clawku.id", "https://clawku.id/");
+                        ui.hyperlink_to(crate::tl!("Join the Clawku community"), "https://clawku.id/");
+                    }
                     ui.add_space(6.0);
                     ui.label(RichText::new(crate::tl!("MIT OR Apache-2.0. Not affiliated with Autodesk, Inc.")).small().color(t.text_faint));
                 }

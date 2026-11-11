@@ -24,6 +24,12 @@ pub fn route(app: &mut CadApp, id: &str) -> Result<Value, String> {
             Ok(Value::Null)
         }
         "import" | "imp" => {
+            // Where opening belongs to the host page (Clawku), the drawing to import comes from
+            // the browser's own picker; it is imported when it has been read.
+            if let Some(pick) = app.services.pick_upload.as_ref() {
+                pick(crate::hosted::Upload::Import);
+                return Ok(Value::Null);
+            }
             let Some(pick) = app.services.pick_open.as_ref() else { return no_picker(app, "IMPORT", r#"import {"path": "parts.dxf"}"#) };
             match pick() {
                 Some(path) => app.run("import", json!({ "path": path })),

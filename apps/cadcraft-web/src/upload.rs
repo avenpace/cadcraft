@@ -7,11 +7,16 @@
 //! build's font folder: they are registered with the font table
 //! ([`cadcraft_fonts::shx::register`]) under their file name, so the styles and linetypes that
 //! name them draw with them, and the drawings are regenerated.
+//!
+//! Where opening belongs to the host page (Clawku), IMPORT and a linetype file still use the
+//! browser's own picker ([`Inbox::pick_for`]): the file read for them goes to
+//! [`CadApp::receive_upload`] instead of being opened.
 
 use std::cell::Cell;
 use std::rc::Rc;
 
 use cadcraft_ui_egui::CadApp;
+use cadcraft_ui_egui::hosted::Upload as Purpose;
 use wasm_bindgen::JsCast as _;
 use web_sys::js_sys;
 
@@ -26,13 +31,16 @@ const MAX_PICKED: u32 = 64;
 /// memory (each file is copied once more into the app).
 const MAX_READING_BYTES: u64 = 512 << 20;
 
-/// A file read in the browser (name, contents), or why it couldn't be read.
+/// A file read in the browser (name, contents), or why it couldn't be read. A file picked for
+/// something other than opening carries what it is for.
 type Upload = Result<(String, Vec<u8>), String>;
+/// A read file, and what it was picked for (`None`: open it).
+type Arrived = (Option<Purpose>, Upload);
 
 /// Files read in the background, waiting for the app's next frame.
 #[derive(Clone)]
 pub struct Inbox {
-    files: Rc<Cell<Vec<Upload>>>,
+    files: Rc<Cell<Vec<Arrived>>>,
     /// Bytes of the files being read now.
     reading: Rc<Cell<u64>>,
     ctx: egui::Context,
@@ -50,12 +58,20 @@ impl Inbox {
         if crate::clawku_pick::host_pick("cadcraft", "document") {
             return;
         }
-        if let Err(e) = self.show_picker() {
+        if let Err(e) = self.show_picker(None) {
             self.push(Err(format!("Open: the browser's file picker is not available ({e})")));
         }
     }
 
-    fn show_picker(&self) -> Result<(), String> {
+    /// Show the browser's own file picker for one file that is not opened but used for `purpose`
+    /// (IMPORT, a linetype file), never the host page's: only opening a drawing goes there.
+    pub fn pick_for(&self, purpose: Purpose) {
+        if let Err(e) = self.show_picker(Some(purpose)) {
+            self.push_for(Some(purpose), Err(format!("the browser's file picker is not available ({e})")));
+        }
+    }
+
+    fn show_picker(&self, purpose: Option<Purpose>) -> Result<(), String> {
         let document = web_sys::window().and_then(|w| w.document()).ok_or("no browser document")?;
         let body = document.body().ok_or("the page has no body")?;
         if let Some(old) = document.get_element_by_id(INPUT_ID) {
@@ -67,9 +83,10 @@ impl Inbox {
             .dyn_into::<web_sys::HtmlInputElement>()
             .map_err(|_| "could not create a file input".to_string())?;
         input.set_type("file");
-        input.set_accept(ACCEPT);
-        // A drawing and the fonts it uses can be chosen together.
-        input.set_multiple(true);
+        input.set_accept(purpose.map_or(ACCEPT, Purpose::accept));
+        // A drawing and the fonts it uses can be chosen together; a file for IMPORT or a
+        // linetype file is one.
+        input.set_multiple(purpose.is_none());
         input.set_id(INPUT_ID);
         input.set_attribute("style", "display:none").map_err(js_error)?;
         let (inbox, chosen) = (self.clone(), input.clone());
@@ -78,7 +95,7 @@ impl Inbox {
             if let Some(files) = chosen.files() {
                 for i in 0..files.length().min(MAX_PICKED) {
                     if let Some(file) = files.get(i) {
-                        inbox.read(file);
+                        inbox.read(file, purpose);
                     }
                 }
                 let skipped: Vec<String> = (MAX_PICKED..files.length()).filter_map(|i| files.get(i)).map(|f| f.name()).collect();
@@ -99,24 +116,25 @@ impl Inbox {
     pub fn take_dropped(&self, ctx: &egui::Context) {
         for f in ctx.input_mut(|i| std::mem::take(&mut i.raw.dropped_files)) {
             if let Some(file) = f.web_file() {
-                self.read(file.clone());
+                self.read(file.clone(), None);
             }
         }
     }
 
     /// Read `file` in the background; it arrives through [`Self::drain`]. A file too large to
     /// open is refused before it is read.
-    fn read(&self, file: web_sys::File) {
+    fn read(&self, file: web_sys::File, purpose: Option<Purpose>) {
         let name = file.name();
         // `File.size` is a whole number of bytes; anything else counts as too large.
         let size = file.size();
         let len = if size.is_finite() && size >= 0.0 { size as u64 } else { u64::MAX };
         if let Some(e) = CadApp::open_size_error(&name, len) {
-            return self.push(Err(e));
+            return self.push_for(purpose, Err(e));
         }
         let reading = self.reading.get();
         if reading.saturating_add(len) > MAX_READING_BYTES {
-            return self.push(Err(format!("Open: {name} was not read: the files being read together are too large; open it on its own")));
+            return self
+                .push_for(purpose, Err(format!("Open: {name} was not read: the files being read together are too large; open it on its own")));
         }
         self.reading.set(reading.saturating_add(len));
         let inbox = self.clone();
@@ -126,7 +144,7 @@ impl Inbox {
                 Err(e) => Err(format!("Open: could not read {name}: {}", js_error(e))),
             };
             inbox.reading.set(inbox.reading.get().saturating_sub(len));
-            inbox.push(r);
+            inbox.push_for(purpose, r);
         });
     }
 
@@ -145,8 +163,12 @@ impl Inbox {
     }
 
     fn push(&self, upload: Upload) {
+        self.push_for(None, upload);
+    }
+
+    fn push_for(&self, purpose: Option<Purpose>, upload: Upload) {
         let mut files = self.files.take();
-        files.push(upload);
+        files.push((purpose, upload));
         self.files.set(files);
         self.ctx.request_repaint();
     }
@@ -154,7 +176,8 @@ impl Inbox {
     /// Open what arrived since the last frame (or report why it couldn't be read). Fonts are
     /// registered first, so drawings opened with them draw with them.
     pub fn drain(&self, app: &mut CadApp) {
-        let (fonts, files): (Vec<Upload>, Vec<Upload>) = self.files.take().into_iter().partition(|u| u.as_ref().is_ok_and(|(n, _)| is_shx(n)));
+        let (picked, opened): (Vec<Arrived>, Vec<Arrived>) = self.files.take().into_iter().partition(|(purpose, _)| purpose.is_some());
+        let (fonts, files): (Vec<Upload>, Vec<Upload>) = opened.into_iter().map(|(_, u)| u).partition(|u| u.as_ref().is_ok_and(|(n, _)| is_shx(n)));
         let mut registered = false;
         for (name, bytes) in fonts.into_iter().flatten() {
             match cadcraft_fonts::shx::register(&name, &bytes) {
@@ -169,6 +192,14 @@ impl Inbox {
             match upload {
                 Ok((name, bytes)) => app.open_bytes(&name, &bytes),
                 Err(e) => app.open_failed(e),
+            }
+        }
+        for (purpose, upload) in picked {
+            match (purpose, upload) {
+                (Some(purpose), Ok((name, bytes))) => app.receive_upload(purpose, &name, &bytes),
+                (_, Err(e)) => app.open_failed(e),
+                // `picked` holds only files with a purpose.
+                (None, Ok(_)) => {}
             }
         }
     }

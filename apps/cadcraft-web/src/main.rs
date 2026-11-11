@@ -9,6 +9,10 @@
 //! same-origin parent page sends the drawing to open and stores what CADCraft saves instead
 //! (`host.rs`); a page can also host CADCraft in its own document (no iframe) with
 //! `data-host="page"` on the canvas, talking over DOM `CustomEvent`s on it (`host.rs`).
+//! Framed with `?host=parent&open=host` (Clawku) the app is hosted (`Services::hosted`): the
+//! page owns the files, so the app shows the one drawing it was sent, without New, Close, the
+//! Start page or the file tabs; Save goes back under the page's name, Save As is marked as one,
+//! Share asks the page, IMPORT uses the browser's own picker and Print prints (`print.rs`).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 #[cfg(target_arch = "wasm32")]
@@ -19,6 +23,8 @@ mod clawku_pick;
 pub mod download;
 #[cfg(target_arch = "wasm32")]
 mod host;
+#[cfg(target_arch = "wasm32")]
+mod print;
 
 #[cfg(any(target_arch = "wasm32", test))]
 mod panel_layout;
@@ -130,6 +136,22 @@ mod web {
         Services { pick_save: Some(Box::new(|name: &str| Some(name.to_string()))), no_file_system: true, ..Services::default() }
     }
 
+    /// The hosted app's services (Clawku): Save As is marked to the page, Share asks the page,
+    /// IMPORT and a linetype file use the browser's own picker (only opening goes to the page),
+    /// and Print opens the browser's print dialog instead of storing a PDF.
+    fn hosted_services(services: &mut Services, inbox: &crate::upload::Inbox) {
+        services.hosted = true;
+        services.host_save_as = Some(Box::new(crate::host::mark_save_as));
+        services.share = Some(Box::new(|| {
+            if !crate::clawku_pick::host_share("cadcraft") {
+                log::warn!("share: the page that hosts ClawCAD is gone");
+            }
+        }));
+        let uploads = inbox.clone();
+        services.pick_upload = Some(Box::new(move |purpose| uploads.pick_for(purpose)));
+        services.print = Some(Box::new(crate::print::print));
+    }
+
     pub fn start() {
         eframe::WebLogger::init(log::LevelFilter::Info).ok();
         cadcraft_engine::cmd::file::set_io(cadcraft_engine::cmd::file::IoHooks {
@@ -179,6 +201,9 @@ mod web {
                     options,
                     Box::new(move |cc| {
                         // Embedded, the host sends the drawing: start on the Start tab, not Drawing1.
+                        // Hosted by Clawku (`?host=parent&open=host`, framed by a same-origin page):
+                        // one drawing, no Start page (`Services::hosted`).
+                        let hosted = app_bridge.is_some() && crate::clawku_pick::is_hosted();
                         let session = if app_bridge.is_some() { Session::empty() } else { Session::new() };
                         let mut app = CadApp::new(session, services());
                         app.system_languages =
@@ -202,7 +227,7 @@ mod web {
                             // viewports stay in the layout's display list.
                             app.set_wgpu(rs, None);
                         }
-                        if query().contains("sample") {
+                        if !hosted && query().contains("sample") {
                             let _ = app.run("ui.sample", serde_json::json!({}));
                         }
                         // `?control`: `window.cadcraft`, the page's command API (`api`), opt-in.
@@ -227,6 +252,9 @@ mod web {
                             picker.pick();
                             None
                         }));
+                        if hosted {
+                            hosted_services(&mut app.services, &inbox);
+                        }
                         let host = app_bridge.inspect(|bridge| {
                             bridge.listen(inbox.clone());
                             bridge.post_ready();
@@ -260,6 +288,14 @@ fn wants_cpu(query: &str) -> bool {
 #[cfg(any(target_arch = "wasm32", test))]
 fn wants_control(query: &str) -> bool {
     query.trim_start_matches('?').split('&').any(|p| p == "control" || p.starts_with("control="))
+}
+
+/// True when the URL query (`?host=parent&open=host&control`) asks for Clawku's hosting: the
+/// framing page owns the files (`clawku_pick`), so the app is hosted (`Services::hosted`).
+#[cfg(any(target_arch = "wasm32", test))]
+fn wants_host_open(query: &str) -> bool {
+    let has = |key: &str, value: &str| query.trim_start_matches('?').split('&').any(|p| p.split_once('=') == Some((key, value)));
+    has("host", "parent") && has("open", "host")
 }
 
 /// The browser tab title: the open drawing's file name, a bullet once it has unsaved changes,
@@ -315,7 +351,20 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{document_title, push_title, title_to_send, wants_control, wants_cpu};
+    use super::{document_title, push_title, title_to_send, wants_control, wants_cpu, wants_host_open};
+
+    /// Guards Clawku's hosting flag: both `host=parent` and `open=host` must be there, as whole
+    /// parameters; either alone (a Nextcloud-style host, or a stray `open`) is not hosted.
+    #[test]
+    fn host_open_flag_needs_both_parameters() {
+        assert!(wants_host_open("?host=parent&open=host"));
+        assert!(wants_host_open("?control&open=host&author=Ann&host=parent"));
+        assert!(!wants_host_open("?host=parent"));
+        assert!(!wants_host_open("?open=host"));
+        assert!(!wants_host_open("?host=parent&open=hostile"));
+        assert!(!wants_host_open("?xhost=parent&open=host"));
+        assert!(!wants_host_open(""));
+    }
 
     /// Guards the `?cpu` URL flag: only a whole `cpu` query parameter (bare or with a value)
     /// selects the CPU canvas, so `?sample` and `?gpucpu` stay on the GPU path.

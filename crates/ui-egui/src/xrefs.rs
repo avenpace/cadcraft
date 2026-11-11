@@ -130,7 +130,8 @@ pub fn section(app: &mut CadApp, ui: &mut egui::Ui) {
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         ui.add_space(8.0);
-        if ui.button(crate::tl!("Attach DWG...")).clicked() {
+        // Hosted (Clawku) there are no files beside the drawing to attach from.
+        if !app.services.hosted && ui.button(crate::tl!("Attach DWG...")).clicked() {
             act = Some(Act::Start("xattach"));
         }
         if ui.add_enabled(!rows.is_empty(), egui::Button::new(crate::tl!("Reload All"))).clicked() {
