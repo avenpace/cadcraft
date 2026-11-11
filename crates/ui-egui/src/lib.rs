@@ -67,6 +67,7 @@ pub mod quick;
 pub mod save_loss;
 pub mod shortcut_menus;
 pub mod theme;
+pub mod touch;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod updates_ui;
 pub mod viewcube;
@@ -302,6 +303,9 @@ pub struct CadApp {
     pub raise_panel: Option<docking::Panel>,
     /// One synthetic batch has been put into `RawInput` and is waiting for a real `App::ui` call.
     synthetic_injected: bool,
+    /// Fingers off the drawing on a touch screen: a drag scrolls panels, lists and text fields
+    /// ([`touch::FingerFilter`]).
+    pub(crate) fingers: touch::FingerFilter,
     /// Counts settled UI passes (one per painted frame; never hidden logic-only ticks or
     /// discarded passes).
     pub ui_frames: u64,
@@ -383,6 +387,7 @@ impl CadApp {
             restore_modifiers: None,
             raise_panel: None,
             synthetic_injected: false,
+            fingers: touch::FingerFilter::default(),
             ui_frames: 0,
             #[cfg(not(target_arch = "wasm32"))]
             frame_cap: None,
@@ -790,6 +795,14 @@ impl CadApp {
     /// the previous one.
     pub fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         capture::note_raw_geometry(self, ctx, raw);
+        // Fingers off the drawing scroll panels, lists and text fields (`touch::FingerFilter`).
+        // The forwarded keys and the control channel's input, added below, pass as they are.
+        if raw.viewport_id == egui::ViewportId::ROOT {
+            let canvas = self.canvas.rect;
+            let on_canvas =
+                |p: egui::Pos2| canvas.is_some_and(|r| r.contains(p)) && ctx.layer_id_at(p).is_none_or(|l| l.order == egui::Order::Background);
+            self.fingers.filter(raw, on_canvas, || touch::under_finger(ctx));
+        }
         // The forwarded window's modifiers hold for the frame its keys go in (Shift+Copy is
         // COPYBASE); the next frame puts the main window's back, before its own changes.
         if !self.forwarded.is_empty() {
@@ -826,6 +839,25 @@ impl CadApp {
         let n = n.min(self.synthetic.len());
         raw.events.extend(self.synthetic.drain(..n));
         self.synthetic_injected = true;
+    }
+
+    /// The device's main pointer is a finger (a phone or tablet: `(pointer: coarse)` on the web):
+    /// its first press is already read as a finger's ([`touch::FingerFilter::expect_touch`]).
+    pub fn expect_touch(&mut self) {
+        self.fingers.expect_touch();
+    }
+
+    /// A finger dragging off the drawing scrolls the scroll area under it, 1:1
+    /// ([`touch::FingerFilter`]), as a wheel would. After [`animation::unsmooth_scroll`], which
+    /// sets the frame's wheel scroll.
+    fn finger_scroll(&mut self, ctx: &egui::Context) {
+        let d = self.fingers.take_scroll();
+        if d != egui::Vec2::ZERO {
+            ctx.input_mut(|i| i.smooth_scroll_delta += d);
+        }
+        if let Some(after) = self.fingers.repaint_after() {
+            ctx.request_repaint_after(after);
+        }
     }
 
     /// Lay out the whole window. This is the only place with a real UI pass.
@@ -893,6 +925,7 @@ impl CadApp {
         if !animate {
             animation::unsmooth_scroll(ctx);
         }
+        self.finger_scroll(ctx);
         // Applied only when the saved scale changes, so egui's own keyboard zoom keeps working
         // within a session (and is never saved).
         let scale = self.options.interface_scale;

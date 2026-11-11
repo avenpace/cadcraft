@@ -118,6 +118,11 @@ mod web {
         }
     }
 
+    /// The device's main pointer is a finger (`(pointer: coarse)`): a phone or a tablet.
+    fn coarse_pointer() -> bool {
+        web_sys::window().and_then(|w| w.match_media("(pointer: coarse)").ok().flatten()).is_some_and(|m| m.matches())
+    }
+
     fn query() -> String {
         web_sys::window().and_then(|w| w.location().search().ok()).unwrap_or_default()
     }
@@ -206,6 +211,11 @@ mod web {
                         let hosted = app_bridge.is_some() && crate::clawku_pick::is_hosted();
                         let session = if app_bridge.is_some() { Session::empty() } else { Session::new() };
                         let mut app = CadApp::new(session, services());
+                        // A phone or tablet (`(pointer: coarse)`): its first press is already a
+                        // finger's (a drag off the drawing scrolls; `touch::FingerFilter`).
+                        if coarse_pointer() {
+                            app.expect_touch();
+                        }
                         app.system_languages =
                             web_sys::window().map(|w| w.navigator().languages().iter().filter_map(|v| v.as_string()).collect()).unwrap_or_default();
                         if let Some(profile) = cc.storage.and_then(|s| s.get_string(cadcraft_ui_egui::options::PROFILE_KEY)) {

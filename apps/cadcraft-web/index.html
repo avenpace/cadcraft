@@ -7,7 +7,8 @@
   <link data-trunk rel="rust" data-bin="cadcraft-web" data-wasm-opt="z" data-weak-refs />
   <style>
     html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #22282f; }
-    #cadcraft_canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+    /* The app takes every finger gesture (scroll, pan, pinch): the browser neither scrolls nor zooms the page. */
+    #cadcraft_canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
     #cadcraft_loading { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
       color: #b8b8b8; font: 14px system-ui, sans-serif; pointer-events: none; }
   </style>

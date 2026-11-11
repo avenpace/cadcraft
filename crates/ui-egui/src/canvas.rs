@@ -180,6 +180,11 @@ pub struct CanvasState {
     pub param: crate::parametric::Cache,
     /// A selection window opened by a press-and-drag, to close where the button is let go.
     drag_window: bool,
+    /// The fingers on the drawing: two pan and zoom it and drop what the first began
+    /// ([`crate::touch::CanvasFingers`]).
+    pub fingers: crate::touch::CanvasFingers,
+    /// A finger is dragging the view while PAN runs ([`finger_pan`]): letting go places no point.
+    finger_panning: bool,
     /// The right-click that opened the shortcut menu held Shift or Ctrl: it is the object snap
     /// menu ([`crate::context_menu`]).
     pub snap_menu: bool,
@@ -266,6 +271,8 @@ struct Navigation<'a> {
     response: &'a egui::Response,
     xf: Xf,
     pointer: PointerInput,
+    /// A two-finger gesture on the drawing is on ([`crate::touch::CanvasFingers`]).
+    gesture: bool,
 }
 
 fn navigate_canvas(app: &mut CadApp, ui: &mut egui::Ui, nav: &Navigation<'_>) -> Option<(bool, bool)> {
@@ -282,9 +289,10 @@ fn navigate_canvas(app: &mut CadApp, ui: &mut egui::Ui, nav: &Navigation<'_>) ->
     });
     handle_scroll_zoom(app, ui, nav, inside);
     handle_button_navigation(app, nav, inside);
-    if nav.response.dragged_by(egui::PointerButton::Primary) && app.session.realtime_zoom_active() {
+    if !nav.gesture && nav.response.dragged_by(egui::PointerButton::Primary) && app.session.realtime_zoom_active() {
         let _ = app.session.realtime_zoom(f64::from(nav.response.drag_delta().y));
     }
+    finger_pan(app, nav);
     if p.pressed_primary
         && let Some(at) = p.hover_pos
         && !nav.rect.contains(at)
@@ -324,12 +332,65 @@ fn handle_scroll_zoom(app: &mut CadApp, ui: &mut egui::Ui, nav: &Navigation<'_>,
         let about = nav.xf.to_world(at);
         let _ = app.session.zoom_about(factor, about);
     }
+    // Fingers: the drawing's own two-finger gesture pans and zooms ([`finger_pinch`]); fingers
+    // that came down elsewhere (a panel) leave the drawing alone.
+    if let Some(touch) = ui.input(|i| i.multi_touch()) {
+        if app.canvas.fingers.pinching() {
+            finger_pinch(app, nav, touch);
+        }
+        return;
+    }
     let pinch = ui.input(|i| crate::animation::zoom_delta(i, &opts, app.shows_animations()));
     if inside
         && (pinch - 1.0).abs() > 1e-4
         && let Some(at) = p.hover_pos
     {
         let _ = app.session.zoom_about(f64::from(pinch), nav.xf.to_world(at));
+    }
+}
+
+/// Two fingers on the drawing: the view follows the point between them (the content moves with
+/// the fingers) and zooms about it as they spread or close.
+fn finger_pinch(app: &mut CadApp, nav: &Navigation<'_>, touch: egui::MultiTouchInfo) {
+    let (moved, factor) = (touch.translation_delta, touch.zoom_delta);
+    let Ok(st) = app.session.state_mut() else { return };
+    let view = st.view();
+    if moved.is_finite() && moved != egui::Vec2::ZERO {
+        st.set_view_quiet(cadcraft_engine::View {
+            center: view.center - nav.xf.screen_delta_to_world(moved),
+            height: view.height,
+            twist: view.twist,
+        });
+    }
+    if factor.is_finite() && (factor - 1.0).abs() > 1e-6 && touch.center_pos.is_finite() {
+        let panned = Xf { center: st.view().center, ..nav.xf };
+        let _ = app.session.zoom_about(f64::from(factor), panned.to_world(touch.center_pos));
+    }
+    nav.response.ctx.request_repaint();
+}
+
+/// While PAN runs, one finger dragging on the drawing pans it as the middle button does (a tap
+/// still picks PAN's points); a mouse's drag is left to the prompt as before.
+fn finger_pan(app: &mut CadApp, nav: &Navigation<'_>) {
+    let finger = app.canvas.fingers.finger_down() || nav.response.ctx.input(|i| i.any_touches());
+    let pan = app.session.running.as_ref().is_some_and(|r| r.id == "pan") && app.session.pending_window.is_none();
+    let resp = nav.response;
+    if !nav.gesture && pan && finger && resp.dragged_by(egui::PointerButton::Primary) {
+        app.canvas.finger_panning = true;
+        let d = resp.drag_delta();
+        if d != egui::Vec2::ZERO
+            && d.is_finite()
+            && let Ok(st) = app.session.state_mut()
+        {
+            let view = st.view();
+            st.set_view_quiet(cadcraft_engine::View {
+                center: view.center - nav.xf.screen_delta_to_world(d),
+                height: view.height,
+                twist: view.twist,
+            });
+        }
+    } else if !resp.dragged_by(egui::PointerButton::Primary) && !resp.drag_stopped() {
+        app.canvas.finger_panning = false;
     }
 }
 
@@ -732,6 +793,8 @@ struct PromptClickContext<'a> {
     inside: bool,
     middle_down: bool,
     primary_clicked: bool,
+    /// The pointer's press belongs to a two-finger gesture or a finger's PAN drag: no point.
+    held_back: bool,
     response: &'a egui::Response,
 }
 
@@ -741,7 +804,8 @@ fn collect_prompt_clicks(app: &mut CadApp, ui: &egui::Ui, context: PromptClickCo
     let point_prompt = app.session.current_prompt().is_some_and(|p| cadcraft_engine::pointmod::accepts(&p))
         && app.session.pending_window.is_none()
         && !app.session.realtime_zoom_active();
-    let pressed_primary = context.primary_clicked || (point_prompt && context.response.drag_stopped_by(egui::PointerButton::Primary));
+    let pressed_primary =
+        !context.held_back && (context.primary_clicked || (point_prompt && context.response.drag_stopped_by(egui::PointerButton::Primary)));
     if point_prompt && context.inside && pressed_primary && !context.middle_down && app.cmd.options.is_none() && app.cmd.buffer.is_empty() {
         let releases: Vec<egui::Pos2> = ui.input(|i| {
             i.events
@@ -810,7 +874,22 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         dbl_middle: i.pointer.button_double_clicked(egui::PointerButton::Middle),
         dbl_primary: i.pointer.button_double_clicked(egui::PointerButton::Primary),
     });
-    let navigation = Navigation { rect, tiles: &tiles, response: &resp, xf, pointer };
+    // Two fingers that came down on the drawing pan and zoom it; nothing the first finger's press
+    // began counts (`touch::CanvasFingers`).
+    let layer = ui.layer_id();
+    let touches = ui.input(|i| i.events.iter().filter(|e| matches!(e, egui::Event::Touch { .. })).cloned().collect::<Vec<_>>());
+    let fingers = app.canvas.fingers.feed(&touches, |p| full.contains(p) && ui.ctx().layer_id_at(p).is_none_or(|l| l == layer));
+    if fingers.began && app.canvas.drag_window {
+        // The selection window the first finger's drag opened.
+        app.canvas.drag_window = false;
+        app.session.pending_window = None;
+    }
+    let mut pointer = pointer;
+    if fingers.gesture {
+        pointer.pressed_primary = false;
+        pointer.dbl_primary = false;
+    }
+    let navigation = Navigation { rect, tiles: &tiles, response: &resp, xf, pointer, gesture: fingers.gesture };
     let Some((inside, on_menu)) = navigate_canvas(app, ui, &navigation) else { return };
     let PointerInput { hover_pos, mods, middle_down, pressed_primary, pressed_secondary, dbl_primary, .. } = pointer;
     // Re-read the view after navigation.
@@ -846,8 +925,15 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         return;
     };
 
-    let pressed_primary =
-        collect_prompt_clicks(app, ui, PromptClickContext { rect, xf, inside, middle_down, primary_clicked: pressed_primary, response: &resp });
+    let held_back = fingers.gesture || app.canvas.finger_panning;
+    let pressed_primary = collect_prompt_clicks(
+        app,
+        ui,
+        PromptClickContext { rect, xf, inside, middle_down, primary_clicked: pressed_primary, held_back, response: &resp },
+    );
+    if !resp.dragged() {
+        app.canvas.finger_panning = false;
+    }
 
     let (raw_world, dyn_frame) = update_canvas_cursor(app, ui, &xf, inside, hover_pos);
 
@@ -925,6 +1011,7 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
         app.canvas.drag_window = false;
     }
     if app.session.settings.pickdrag
+        && !held_back
         && resp.drag_started_by(egui::PointerButton::Primary)
         && !middle_down
         && app.canvas.cycle.is_none()
@@ -1199,6 +1286,8 @@ fn paint_canvas(frame: CanvasPaint<'_>) {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 pub(crate) mod tests;
+#[cfg(test)]
+mod touch_tests;
 
 /// The Block Editor's tint, base point and bar.
 mod blockedit;
